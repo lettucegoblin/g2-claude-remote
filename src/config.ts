@@ -144,8 +144,13 @@ export const HUD_CHARS_PER_ROW = numEnv(env.VITE_HUD_CHARS_PER_ROW, 40)
  * Kept under glasses.ts's per-container byte ceiling (BODY_BYTE_CAP ≈ 980).
  */
 export const HISTORY_WINDOW_BYTES = numEnv(env.VITE_HISTORY_BYTES, 900)
-/** Clip a tool command / permission input to this many chars on the HUD. */
-export const INPUT_CLIP_CHARS = numEnv(env.VITE_INPUT_CLIP_CHARS, 140)
+/**
+ * Chars allowed for the ARGUMENT half of a tool-chain entry (`Read factory.py`)
+ * — see `packToolChain` in events/format.ts. Several entries share a HUD row, so
+ * this is deliberately tight: it fits a file basename or a `cargo test`, not a
+ * whole command line (the panel shows the full input).
+ */
+export const TOOL_ARG_CHARS = numEnv(env.VITE_TOOL_ARG_CHARS, 18)
 
 // ─── Steering vocabulary ─────────────────────────────────────────────────────
 /** Models offered in the Compose → Model submenu (matches the claude-rc web SPA). */

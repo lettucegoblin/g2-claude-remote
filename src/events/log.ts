@@ -2,12 +2,13 @@
 //
 // Events arrive out of the SSE stream (and from a one-shot history fetch on
 // open, which can overlap the stream). We dedupe by sequenceNum, render each
-// event to HUD text via renderEvent (dropping the ones it maps to ''), and keep
-// the rendered lines. The session view scrolls these natively on the glasses, so
+// event via renderEventParts (dropping the ones that map to nothing), fold runs
+// of tool_uses into compact chain lines, and keep the rendered lines. The
+// session view scrolls these natively on the glasses, so
 // instead of software pages we hand it whole-line WINDOWS (tailWindow /
 // windowBefore / windowFrom) sized to a char budget, never splitting a line.
 
-import { renderEvent } from './format'
+import { renderEventParts, packToolChain } from './format'
 import { byteLen, HUD } from '../glasses'
 import type { RcEvent } from '../rc/types'
 
@@ -18,13 +19,23 @@ export class EventLog {
   private lines: string[] = []
   private seen = new Set<number>()
   private last: RcEvent | undefined
+  // The OPEN tool chain: where its block starts in `lines`, and every entry it
+  // holds. A RUN of tool_uses is one block that grows and re-packs in place, so
+  // a 27-tool run costs a few rows instead of 27. -1 = no chain open.
+  private chainStart = -1
+  private chainEntries: string[] = []
 
   /**
    * Ingest one event: dedupe by sequenceNum, render it, and append the
-   * resulting line(s). Events that render to '' are dropped from the log but
-   * still tracked as the latest raw event. A blank spacer line is inserted
-   * BETWEEN successive events (never leading) so distinct turns are visually
+   * resulting line(s). Events that render to nothing are dropped from the log
+   * but still tracked as the latest raw event. A blank spacer line is inserted
+   * BETWEEN successive blocks (never leading) so distinct turns are visually
    * separated on the HUD instead of blurring into one wall of text.
+   *
+   * Consecutive tool_uses join one chain block rather than taking a line each.
+   * A dropped event does NOT break that run — a tool_result echo lands between
+   * every pair of tool_uses, so breaking on it would make every chain one tool
+   * long. Only real content (prose, a result, a system line) closes the chain.
    *
    * Returns whether the event was FRESH (false = a sequenceNum we already
    * ingested, e.g. an SSE reconnect replaying its catch-up window). Callers use
@@ -36,14 +47,51 @@ export class EventLog {
       this.seen.add(e.sequenceNum)
     }
     this.last = e
-    const rendered = renderEvent(e)
-    if (!rendered) return true
-    if (this.lines.length > 0) this.lines.push('') // spacer between events
-    for (const line of rendered.split('\n')) this.lines.push(line)
-    if (this.lines.length > MAX_LINES) {
-      this.lines.splice(0, this.lines.length - MAX_LINES)
+    const { text, tools } = renderEventParts(e)
+    if (!text && tools.length === 0) return true // drops without breaking the chain
+    if (text) {
+      this.chainStart = -1
+      this.chainEntries = []
+      if (this.lines.length > 0) this.lines.push('') // spacer between blocks
+      for (const line of text.split('\n')) this.lines.push(line)
     }
+    // `attached`: these tools belong to the event whose prose we just wrote, so
+    // they stay welded to it instead of opening a spacer-separated block.
+    if (tools.length > 0) this.extendChain(tools, Boolean(text))
+    this.trim()
     return true
+  }
+
+  /**
+   * Add `entries` to the open tool chain (opening one first if needed) and
+   * re-pack that block in place. Only ever rewrites the TAIL lines, so the
+   * indices a frozen history window holds into older lines stay valid.
+   */
+  private extendChain(entries: string[], attached: boolean): void {
+    if (this.chainStart < 0) {
+      if (!attached && this.lines.length > 0) this.lines.push('')
+      this.chainStart = this.lines.length
+      this.chainEntries = []
+    }
+    this.chainEntries.push(...entries)
+    this.lines.length = this.chainStart // drop the previous packing
+    for (const line of packToolChain(this.chainEntries)) this.lines.push(line)
+  }
+
+  /** Enforce MAX_LINES, keeping the open chain's index pointing at its block. */
+  private trim(): void {
+    if (this.lines.length <= MAX_LINES) return
+    const dropped = this.lines.length - MAX_LINES
+    this.lines.splice(0, dropped)
+    if (this.chainStart < 0) return
+    // Trimming shifts every index down. A chain whose own block was partly
+    // trimmed can no longer be re-packed safely, so close it and start fresh.
+    if (this.chainStart < dropped) {
+      this.chainStart = -1
+      this.chainEntries = []
+    } else {
+      this.chainStart -= dropped
+    }
   }
 
   /** All rendered lines joined oldest→newest. */
@@ -145,6 +193,8 @@ export class EventLog {
     this.lines = []
     this.seen = new Set<number>()
     this.last = undefined
+    this.chainStart = -1
+    this.chainEntries = []
   }
 }
 

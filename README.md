@@ -39,6 +39,8 @@ Can't connect? Open the bridge's port (default `8790`) in the host firewall.
 
 - **Live sessions on the HUD** - each opens on its newest output and auto-follows
   while running. Scroll up to page through history, down to re-attach to the tail.
+  Runs of tool calls collapse into one compact line (`◆ Read factory.py, Edit
+  scene.yaml`) so what Claude is actually saying stays readable.
 - **Answer blocking prompts** - permission requests and questions arrive as native
   screens (right away if you're watching, `! needs you` in the footer if not).
   Tap to answer, double-tap to set aside. Answer one elsewhere and it retires itself.

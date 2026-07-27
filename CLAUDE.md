@@ -93,6 +93,22 @@ npx @evenrealities/evenhub-cli qr --url http://<host>:5175   # sideload QR
   `HUD_CHARS_PER_ROW`, wrapping counted) so it always fits — a byte budget alone
   can't guarantee that. Every session opens on this tail (`● live` running /
   `○ latest` idle); scroll-up enters history.
+- **Consecutive tool_uses COLLAPSE into chain lines — never one line each.**
+  Measured on live sessions: ~6 tool calls per line of assistant prose, in runs
+  of up to 27, and one verbose `◆ Name  <input>` line each (a long path or shell
+  command) wrapped to 4 of the 6 live rows, so the HUD showed two tool calls and
+  none of the narration. Now `format.ts` squeezes each tool to a `Name arg`
+  ENTRY (`toolChainEntry`) and packs a run into one-row `◆ a, b, c` lines
+  (`packToolChain`), folding consecutive identical entries to `entry xN`. Two
+  rules keep it working: only CRISP args earn the slot (a command's program, a
+  path's basename, a pattern, a URL host — never `description`/`prompt`/`query`,
+  which blow the width AND, differing every call, defeat the `xN` fold); and
+  `EventLog` owns the run, because `renderEventParts` is per-event and can't see
+  neighbours. **An event that renders to nothing must NOT break the chain** — a
+  `tool_result` echo lands between every pair of tool_uses, so breaking on it
+  makes every chain exactly one tool long. Only real content (prose, a result, a
+  prompt) closes it. The chain re-packs its block IN PLACE on each new tool, and
+  only ever rewrites tail lines so frozen history-window indices stay valid.
 - **Content caps are BYTES, not chars** (~1000 per rebuild, ~2000 per upgrade,
   999 in the simulator; native lists: 20 rows, ~63 bytes per item), and HUD
   glyphs are 2–3 bytes each — an oversize container is **silently dropped** (the
@@ -227,7 +243,7 @@ npx @evenrealities/evenhub-cli qr --url http://<host>:5175   # sideload QR
   makes the panel fill `/name ` and wait for a typed argument (glasses fire bare
   — v1 has no on-glasses argument entry; dictated args are a planned fast-follow).
 - **Command echoes are cleaned on BOTH surfaces by `cleanUserEcho`** (exported
-  from `events/format.ts`, used by the HUD's `renderEvent` AND the panel's
+  from `events/format.ts`, used by the HUD's `renderEventParts` AND the panel's
   `renderEventNode`). It unwraps `<command-name>` / `<command-args>` /
   `<local-command-stdout>` to readable text and DROPS the `<local-command-caveat>`
   block (that block is addressed to the model — "DO NOT respond to these
