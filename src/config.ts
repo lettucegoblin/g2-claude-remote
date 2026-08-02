@@ -258,9 +258,10 @@ export const DEEPGRAM_MODEL = strEnv(env.VITE_DEEPGRAM_MODEL, 'nova-3')
 export const STT_LANGUAGE = strEnv(env.VITE_STT_LANGUAGE, 'en')
 /** Master switch for voice dictation (also needs the Deepgram key). */
 const VOICE_MASTER = boolEnv(env.VITE_VOICE_ENABLED, true)
-export const VOICE_ENABLED = VOICE_MASTER && DEEPGRAM_API_KEY.length > 0
 /** Live voice availability: the master switch plus a Deepgram key entered in the
- *  Settings card (so adding a key enables voice without a reload). */
+ *  Settings card (so adding a key enables voice without a reload). Always ask
+ *  this — there is no load-time snapshot, because a key saved in the Settings
+ *  card must enable voice without a reload. */
 export function voiceEnabled(): boolean {
   return VOICE_MASTER && currentDeepgramKey().length > 0
 }

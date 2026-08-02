@@ -310,10 +310,3 @@ function modelTail(m: string | null): string {
   if (!m) return 'unknown'
   return m.replace(/^claude-/, '')
 }
-
-/** The single most relevant tool name for a session-view header hint, or ''. */
-export function toolSummary(e: RcEvent): string {
-  if (e.type === 'control_request' && e.permissionRequest?.toolName) return e.permissionRequest.toolName
-  const first = e.toolUses.find((t) => t.name)
-  return first?.name ?? ''
-}
