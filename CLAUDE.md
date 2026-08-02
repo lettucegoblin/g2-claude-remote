@@ -289,6 +289,8 @@ npx @evenrealities/evenhub-cli qr --url http://<host>:5175   # sideload QR
   Everything committed is world-readable: never commit tokens, tailnet
   hostnames/IPs, or personal paths (`.env.local` / `*.ehpk` / `*.log` are
   gitignored for exactly that reason).
-- The local-only `backup/pre-publish-history` branch holds the pre-squash
-  history and must NEVER be pushed; the old private `rc-g2` GitHub repo stays
-  private. No auto-push — commit + push manually when asked.
+- The pre-squash history lives ONLY in the old private `ThatCrispyToast/rc-g2`
+  repo (5 commits, last pushed 2026-07-17); it stays private and must NEVER be
+  pushed here. The local `backup/pre-publish-history` branch that used to hold
+  a copy did not survive the 2026-07-29 host migration — this checkout has
+  `main` and nothing else. No auto-push — commit + push manually when asked.
