@@ -15,6 +15,7 @@ import { OsEventTypeList, waitForEvenAppBridge } from '@evenrealities/even_hub_s
 import type { EvenAppBridge, EvenHubEvent } from '@evenrealities/even_hub_sdk'
 
 import { APP_TITLE, APP_TITLE_SHORT, BRIDGE_URL, HISTORY_WINDOW_BYTES, HUD_CHARS_PER_ROW, LIVE_BODY_BYTES, LIVE_BODY_ROWS, POLL_MS, SETTINGS_KEY, SLASH_COMMANDS, currentBridge, isBridgeConfigured } from './config'
+import { markNoticeSeen, unseenNotices } from './notices'
 import { GlassesDisplay, HUD, clip, liveTail, screen, type Layout } from './glasses'
 import { HttpBridgeClient } from './rc/client'
 import { BridgeError } from './rc/types'
@@ -158,6 +159,7 @@ class App {
       onStartVoice: () => void this.startVoice(),
       onStopVoice: () => void this.commitVoice(),
       onApplySettings: () => void this.applySettings(),
+      onDismissNotice: (id) => this.dismissNotice(id),
       onExit: () => void this.exit(),
     })
     this.panel.mount(root)
@@ -191,6 +193,9 @@ class App {
     // Restore panel-saved bridge/token from the durable App-side store BEFORE the
     // first connect, so a reopened app reconnects on its own (see hydrateSettings).
     await this.hydrateSettings()
+    // Baked release notices — AFTER hydration, whose restored blob carries the
+    // seen-ids: rendering earlier would flash already-dismissed notices.
+    this.panel.setNotices(unseenNotices())
     await this.checkAuthAndLoad()
     this.pollTimer = setInterval(() => void this.poll(), POLL_MS)
   }
@@ -268,6 +273,16 @@ class App {
     const { url, token } = currentBridge()
     this.origin = url
     this.rc = new HttpBridgeClient(url, token)
+  }
+
+  /** A release notice's × was tapped: record it seen, re-render the (possibly
+   *  now empty) notice area, and mirror the settings blob to the durable
+   *  App-side store — WebView localStorage alone is evicted between launches,
+   *  which would turn "shown once" into "shown every launch". */
+  private dismissNotice(id: string): void {
+    markNoticeSeen(id)
+    this.panel.setNotices(unseenNotices())
+    void this.persistSettings()
   }
 
   /** Save: copy the just-saved settings (already in the browser cache, or absent

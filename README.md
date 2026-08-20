@@ -106,6 +106,11 @@ un-clipped event log with tool inputs and usage/cost, free-text sends with `/`
 slash-command autocomplete, every steering control, and the Settings card. It
 still works as a plain-browser web app with no glasses connected.
 
+App updates can also carry a **release notice** — a slim dismissible card above
+the session list for anything important (say, "update your bridge"). Notices are
+baked into the build (nothing is fetched), each one shows until dismissed and
+then never again on that device, and the glasses HUD is never interrupted.
+
 <p align="center">
   <img src="assets/store/08-panel.png" width="45%" alt="Companion phone panel">
 </p>

@@ -16,6 +16,7 @@
 // monochrome surface and is not governed by this doc.)
 
 import type { ActiveSession, RcEvent, PermissionRequest, DialogQuestion, WhoAmI, Decision, PermissionMode, SlashCommand } from './rc/types'
+import type { Notice } from './notices'
 import { EFFORTS, MODELS, MODES, QUICK_SENDS, SLASH_COMMANDS, APP_TITLE, BRIDGE_URL, BRIDGE_TOKEN, DEEPGRAM_API_KEY, loadRuntimeSettings, saveRuntimeSettings } from './config'
 import { cleanUserEcho } from './events/format'
 
@@ -48,6 +49,8 @@ export interface PanelCallbacks {
   onStopVoice: () => void
   /** Connection settings were saved (or reset) → reconnect in place (no reload). */
   onApplySettings: () => void
+  /** A release notice's × was tapped → record it seen and re-render (notices.ts). */
+  onDismissNotice: (id: string) => void
   /** Leave the whole app. */
   onExit: () => void
 }
@@ -127,6 +130,7 @@ export class Panel {
   private archiveBtn: HTMLButtonElement | null = null
   private toastEl: HTMLDivElement | null = null
   private cmdMenuEl: HTMLDivElement | null = null
+  private noticesEl: HTMLDivElement | null = null
 
   private mounted = false
   private dictating = false
@@ -195,6 +199,7 @@ export class Panel {
             <button id="settingsBtn" class="btn ghost settings-btn" title="Connection settings" aria-label="Connection settings">Settings</button>
           </div>
         </header>
+        <div id="notices" class="notices" hidden></div>
 ${settingsHtml}
         <section id="listView" class="view">
           <div class="view-head">
@@ -272,6 +277,7 @@ ${settingsHtml}
     this.archiveBtn = root.querySelector<HTMLButtonElement>('#archiveBtn')
     this.toastEl = root.querySelector<HTMLDivElement>('#toast')
     this.cmdMenuEl = root.querySelector<HTMLDivElement>('#cmdMenu')
+    this.noticesEl = root.querySelector<HTMLDivElement>('#notices')
 
     // Wire events.
     root.querySelector<HTMLButtonElement>('#exitBtn')?.addEventListener('click', () => this.cb.onExit())
@@ -520,6 +526,46 @@ ${settingsHtml}
       this.connChip.title = `${info.origin} · ${info.state}`
     }
     if (this.originEl) this.originEl.textContent = info.origin
+  }
+
+  // ── Release notices ──────────────────────────────────────────────────────
+  /** Render the not-yet-dismissed baked notices (notices.ts) as slim cards
+   *  between the header and the views. Deliberately unobtrusive: no modal, no
+   *  toast, no badge — a card that sits there until its × is tapped, then never
+   *  returns (main.ts persists the dismissal). Empty list hides the area. */
+  setNotices(list: Notice[]): void {
+    const area = this.noticesEl
+    if (!area) return
+    area.replaceChildren()
+    area.hidden = list.length === 0
+    for (const n of list) {
+      const card = document.createElement('div')
+      card.className = `notice${n.level === 'important' ? ' important' : ''}`
+      const head = document.createElement('div')
+      head.className = 'notice-head'
+      const title = document.createElement('div')
+      title.className = 'notice-title'
+      title.textContent = n.title
+      const dismiss = document.createElement('button')
+      dismiss.className = 'btn ghost notice-dismiss'
+      dismiss.textContent = '×'
+      dismiss.setAttribute('aria-label', 'Dismiss notice')
+      dismiss.addEventListener('click', () => this.cb.onDismissNotice(n.id))
+      head.append(title, dismiss)
+      card.appendChild(head)
+      const body = document.createElement('div')
+      body.className = 'notice-body'
+      body.textContent = n.body
+      card.appendChild(body)
+      if (n.command) {
+        // tap-to-select mono block: the wearer copies it onto the bridge host.
+        const cmd = document.createElement('code')
+        cmd.className = 'notice-cmd'
+        cmd.textContent = n.command
+        card.appendChild(cmd)
+      }
+      area.appendChild(card)
+    }
   }
 
   // ── Sessions list ────────────────────────────────────────────────────────
@@ -1018,6 +1064,26 @@ function injectStyles(): void {
     /* The bridge origin, relocated here from the top bar. */
     .settings-conn { display: flex; flex-direction: column; gap: 3px; }
     .origin { font-size: 13px; color: var(--tc-2nd); font-variant-numeric: tabular-nums; word-break: break-all; }
+
+    /* ── Release notices ─────────────────────────────────────────────────── */
+    /* Slim dismissible cards above the views (notices.ts). Fill contrast per
+       the doc: 'important' rides the BC-Accent wash (the same treatment as a
+       blocked session row), 'info' a plain white card — no borders, no shadow. */
+    .notices { display: flex; flex-direction: column; gap: 6px; }
+    .notices[hidden] { display: none; }
+    .notice { display: flex; flex-direction: column; gap: 6px; padding: 12px 16px;
+      background: var(--bc-1st); border-radius: var(--r); }
+    .notice.important { background: var(--bc-accent); }
+    .notice-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+    .notice-title { font-size: 15px; font-weight: 400; color: var(--tc-1st); }
+    .notice-dismiss { flex: 0 0 auto; font-size: 17px; line-height: 1; padding: 2px 8px;
+      min-width: 0; color: var(--tc-2nd); }
+    .notice-body { font-size: 13px; font-weight: 400; color: var(--tc-2nd); line-height: 1.45; }
+    .notice.important .notice-body { color: var(--tc-1st); }
+    /* Copy-ready command: 8% fill, tap selects the whole line for copying. */
+    .notice-cmd { font: 400 12px/1.5 var(--mono); letter-spacing: 0; color: var(--tc-1st);
+      background: var(--sc-2nd); border-radius: var(--r-in); padding: 8px 10px;
+      word-break: break-all; user-select: all; -webkit-user-select: all; }
 
     /* ── View scaffolding ────────────────────────────────────────────────── */
     .view { display: flex; flex-direction: column; gap: 12px; }

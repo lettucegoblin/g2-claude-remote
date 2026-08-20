@@ -268,6 +268,26 @@ npx @evenrealities/evenhub-cli qr --url http://<host>:5175   # sideload QR
   command (the send + the `<command-name>` echo); the HUD's row-budgeted tail
   usually hides the older one, the panel shows both — acceptable, not deduped.
 
+## Release notices
+
+- **Baked, once, panel-only — all three are deliberate.** `src/notices.ts` holds
+  the app's only "important notice" channel (first use: the 1.7.0 card telling
+  wearers to `uvx --refresh` their bridge for the ≥2.1.220 send fix, rule 4).
+  Ship a notice by appending to the baked `NOTICES` list + a version bump —
+  there is NO fetch and NO bridge route, so never add a server side to this. A
+  notice renders as a slim dismissible card above the session list (accent wash
+  for `important`, tap-to-select mono block for a `command`); the HUD is never
+  touched. Dismissal writes the id into the settings blob's `seenNotices` and
+  main.ts mirrors it to the SDK store — that mirror is what makes "shown once"
+  survive the WebView's localStorage eviction, so `dismissNotice` must keep
+  calling `persistSettings`. Two invariants regression-tested via browser-test:
+  a seeded `seenNotices` hides the card at boot, and a Settings-card Save/Reset
+  carries `seenNotices` forward (`saveRuntimeSettings` reads the stored list
+  when the caller passes none — the card only knows its three fields; losing
+  that merge would resurrect every dismissed notice on the next settings save).
+  Prune-on-dismiss keeps the blob bounded: ids not in the current baked list
+  are dropped, so retiring old notices from the source is always safe.
+
 ## Config & secrets
 
 - **Layering, runtime wins:** panel-saved settings (`claude-remote.settings` in

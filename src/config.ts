@@ -21,6 +21,9 @@ export interface RuntimeSettings {
   bridgeUrl?: string
   bridgeToken?: string
   deepgramApiKey?: string
+  /** Ids of baked release notices already dismissed on this device (notices.ts).
+   *  Rides the same blob so the main.ts SDK-store mirror persists it for free. */
+  seenNotices?: string[]
 }
 
 /** The settings saved from the panel, or {} when absent/unreadable. */
@@ -44,6 +47,13 @@ export function saveRuntimeSettings(s: RuntimeSettings): void {
     if (s.bridgeUrl?.trim()) clean.bridgeUrl = s.bridgeUrl.trim()
     if (s.bridgeToken?.trim()) clean.bridgeToken = s.bridgeToken.trim()
     if (s.deepgramApiKey?.trim()) clean.deepgramApiKey = s.deepgramApiKey.trim()
+    // Seen-notice ids are NOT connection settings: the Settings card's Save and
+    // Reset pass only their three fields, and neither may resurrect notices the
+    // wearer already dismissed — so when the caller doesn't provide the list
+    // (only notices.ts does), carry the stored one forward.
+    const seen = s.seenNotices ?? loadRuntimeSettings().seenNotices
+    const ids = (Array.isArray(seen) ? seen : []).filter((v) => typeof v === 'string' && v).slice(0, 50)
+    if (ids.length > 0) clean.seenNotices = ids
     if (Object.keys(clean).length === 0) window.localStorage?.removeItem(SETTINGS_KEY)
     else window.localStorage?.setItem(SETTINGS_KEY, JSON.stringify(clean))
   } catch {
