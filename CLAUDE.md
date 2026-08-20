@@ -270,23 +270,40 @@ npx @evenrealities/evenhub-cli qr --url http://<host>:5175   # sideload QR
 
 ## Release notices
 
-- **Baked, once, panel-only — all three are deliberate.** `src/notices.ts` holds
-  the app's only "important notice" channel (first use: the 1.7.0 card telling
-  wearers to `uvx --refresh` their bridge for the ≥2.1.220 send fix, rule 4).
-  Ship a notice by appending to the baked `NOTICES` list + a version bump —
-  there is NO fetch and NO bridge route, so never add a server side to this. A
-  notice renders as a slim dismissible card above the session list (accent wash
-  for `important`, tap-to-select mono block for a `command`); the HUD is never
-  touched. Dismissal writes the id into the settings blob's `seenNotices` and
-  main.ts mirrors it to the SDK store — that mirror is what makes "shown once"
-  survive the WebView's localStorage eviction, so `dismissNotice` must keep
-  calling `persistSettings`. Two invariants regression-tested via browser-test:
-  a seeded `seenNotices` hides the card at boot, and a Settings-card Save/Reset
+- **Baked and once — both are deliberate.** `src/notices.ts` holds the app's
+  only "important notice" channel (first use: the 1.7.x card telling wearers to
+  `uvx --refresh` their bridge for the ≥2.1.220 send fix, rule 4). Ship a
+  notice by appending to the baked `NOTICES` list + a version bump — there is
+  NO fetch and NO bridge route, so never add a server side to this. On the
+  panel it's a slim dismissible card above the session list (accent wash for
+  `important`, tap-to-select mono block for a `command`). Dismissal writes the
+  id into the settings blob's `seenNotices` and main.ts mirrors it to the SDK
+  store — that mirror is what makes "shown once" survive the WebView's
+  localStorage eviction, so `dismissNotice` must keep calling
+  `persistSettings`. Two invariants regression-tested via browser-test: a
+  seeded `seenNotices` hides the card at boot, and a Settings-card Save/Reset
   carries `seenNotices` forward (`saveRuntimeSettings` reads the stored list
   when the caller passes none — the card only knows its three fields; losing
   that merge would resurrect every dismissed notice on the next settings save).
   Prune-on-dismiss keeps the blob bounded: ids not in the current baked list
   are dropped, so retiring old notices from the source is always safe.
+- **On the glasses the notice is a ONE-TIME interstitial, never a live
+  surface.** `maybePresentNotices` fires only on checkAuthAndLoad's SUCCESS
+  path (boot → list), at most once per launch (`noticesPresented`) — never
+  over `setup`/`error` (it would bury the connection hint behind a screen
+  whose fix needs the phone anyway; the panel card covers that case) and never
+  mid-session. The screen is the confirm/voice `scroll` idiom: native-scrolled
+  body (title + body + command joined, byte-clamped by glasses.ts), tap = got
+  it (→ shared `dismissNotice`, so the panel card clears too), double-tap =
+  later (queue dropped for this launch, nothing marked seen — returns next
+  launch). Panel and glasses share one seen-state; `dismissNotice` also drops
+  the id from `noticeQueue` and advances/leaves the notice screen, so a panel
+  × while the glasses show the same notice can't leave a stale screen up.
+  Notice text is authored for the panel — the HUD render folds it through
+  `hudSafe` (glasses.ts), because the firmware font drops em dashes/curly
+  quotes silently. Verified in the headless simulator: interstitial after
+  connect, command reachable by native scroll, dbl-tap returns unretired on
+  relaunch, tap retires on both surfaces.
 
 ## Config & secrets
 

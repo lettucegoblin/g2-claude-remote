@@ -10,8 +10,12 @@
 //     (main.ts `persistSettings`), because the WebView's own localStorage is
 //     evicted between app launches — without the mirror "once" would mean
 //     "once per launch".
-//   * UNOBTRUSIVE. Panel-only (a slim dismissible card above the session
-//     list); the glasses HUD is never touched. No modal, no toast, no badge.
+//   * UNOBTRUSIVE. On the panel a slim dismissible card above the session
+//     list — no modal, no toast, no badge. On the glasses a ONE-TIME
+//     interstitial right after connect (tap = got it, double-tap = later);
+//     it never interrupts an open session or hijacks a screen mid-use, and
+//     both surfaces share one seen-state, so acknowledging on either
+//     retires the notice everywhere.
 //
 // Adding a notice for a new update: append an entry here (stable id, newest
 // first) and bump the app version. Removing stale entries is fine — seen-ids

@@ -411,6 +411,18 @@ export function liveTail(text: string, tailChars = LIVE_BODY_BYTES): string {
   return `${HUD.ELL}${clean.slice(clean.length - tailChars)}`
 }
 
+/** Fold typography the firmware font can't draw into plain ASCII. The font has
+ *  no emoji or dingbats and silently drops unknown glyphs, so text authored for
+ *  the panel (release notices) must be folded — em/en dashes, curly quotes,
+ *  ellipsis — before it goes on glass. HUD-set glyphs pass through untouched. */
+export function hudSafe(s: string): string {
+  return s
+    .replace(/[—–]/g, '-')
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/…/g, '...')
+}
+
 /** Compose a header / body / footer text screen with divider lines (boot/error). */
 export function screen(parts: { header?: string; body: string; footer?: string }): string {
   // Wide enough to read as a separator across the 576px screen without wrapping

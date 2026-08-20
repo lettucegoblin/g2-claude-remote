@@ -15,8 +15,8 @@ import { OsEventTypeList, waitForEvenAppBridge } from '@evenrealities/even_hub_s
 import type { EvenAppBridge, EvenHubEvent } from '@evenrealities/even_hub_sdk'
 
 import { APP_TITLE, APP_TITLE_SHORT, BRIDGE_URL, HISTORY_WINDOW_BYTES, HUD_CHARS_PER_ROW, LIVE_BODY_BYTES, LIVE_BODY_ROWS, POLL_MS, SETTINGS_KEY, SLASH_COMMANDS, currentBridge, isBridgeConfigured } from './config'
-import { markNoticeSeen, unseenNotices } from './notices'
-import { GlassesDisplay, HUD, clip, liveTail, screen, type Layout } from './glasses'
+import { markNoticeSeen, unseenNotices, type Notice } from './notices'
+import { GlassesDisplay, HUD, clip, hudSafe, liveTail, screen, type Layout } from './glasses'
 import { HttpBridgeClient } from './rc/client'
 import { BridgeError } from './rc/types'
 import type { ActiveSession, Decision, DialogAnswer, DialogOption, DialogQuestion, EffortLevel, PermissionMode, RcEvent } from './rc/types'
@@ -26,7 +26,7 @@ import { commandItems, composeActions, effortItems, modelItems, modeItems, type 
 import { VoiceDictation } from './input/voice'
 import { Panel } from './ui'
 
-type State = 'boot' | 'setup' | 'list' | 'session' | 'compose' | 'submenu' | 'voice' | 'confirm' | 'permission' | 'question' | 'error'
+type State = 'boot' | 'setup' | 'list' | 'session' | 'compose' | 'submenu' | 'voice' | 'confirm' | 'permission' | 'question' | 'notice' | 'error'
 
 const CLICK = OsEventTypeList.CLICK_EVENT // 0
 const SCROLL_UP = OsEventTypeList.SCROLL_TOP_EVENT // 1
@@ -140,6 +140,13 @@ class App {
   private qIndex = 0
   private qPicks: string[][] = []
 
+  // Release notices on the glasses (notices.ts): the unseen notices queued for
+  // the one-time interstitial, and whether it already presented this launch —
+  // checkAuthAndLoad also runs on setup/error retries and settings changes, and
+  // a reconnect must not replay the screen the wearer already tapped "later" on.
+  private noticeQueue: Notice[] = []
+  private noticesPresented = false
+
   private pollTimer: ReturnType<typeof setInterval> | null = null
 
   // ── boot ───────────────────────────────────────────────────────────────
@@ -211,6 +218,7 @@ class App {
       await this.refreshSessions()
       this.listSelectIndex = 0
       this.go('list')
+      this.maybePresentNotices()
     } catch (e) {
       this.connBridge = 'down'
       this.panel.setConnection({ bridge: 'down', origin: this.origin, state: this.state })
@@ -275,14 +283,56 @@ class App {
     this.rc = new HttpBridgeClient(url, token)
   }
 
-  /** A release notice's × was tapped: record it seen, re-render the (possibly
-   *  now empty) notice area, and mirror the settings blob to the durable
-   *  App-side store — WebView localStorage alone is evicted between launches,
-   *  which would turn "shown once" into "shown every launch". */
+  /** A release notice was acknowledged (panel × or glasses tap): record it
+   *  seen, re-render the (possibly now empty) panel area, and mirror the
+   *  settings blob to the durable App-side store — WebView localStorage alone
+   *  is evicted between launches, which would turn "shown once" into "shown
+   *  every launch". Both surfaces share this path, so a panel dismiss also
+   *  advances (or closes) the glasses notice screen and vice versa. */
   private dismissNotice(id: string): void {
     markNoticeSeen(id)
     this.panel.setNotices(unseenNotices())
     void this.persistSettings()
+    if (this.noticeQueue.some((n) => n.id === id)) {
+      this.noticeQueue = this.noticeQueue.filter((n) => n.id !== id)
+      if (this.state === 'notice') {
+        if (this.noticeQueue.length > 0) this.render() // next queued notice
+        else this.go('list')
+      }
+    }
+  }
+
+  // ── release notices on the glasses ─────────────────────────────────────
+  // A ONE-TIME interstitial, not a live surface: after the first successful
+  // connect of a launch, any not-yet-dismissed baked notice gets one scroll
+  // screen between boot and the session list. Tap = got it (never again on
+  // this device); double-tap = later (returns next launch; the panel card
+  // keeps showing it meanwhile). Presented only on the success path — over
+  // 'setup'/'error' it would bury the connection hint behind a screen whose
+  // fix needs the phone anyway, and the panel banner still covers that case.
+
+  /** Queue unseen notices and present the interstitial, at most once per launch. */
+  private maybePresentNotices(): void {
+    if (!this.glasses || this.noticesPresented) return
+    this.noticeQueue = unseenNotices()
+    if (this.noticeQueue.length === 0) return
+    this.noticesPresented = true
+    this.go('notice')
+  }
+
+  /** Tap on the notice screen: acknowledge the shown notice. `dismissNotice`
+   *  advances to the next queued one or lands on the session list. */
+  private ackNotice(): void {
+    const n = this.noticeQueue[0]
+    if (n) this.dismissNotice(n.id)
+    else this.go('list')
+  }
+
+  /** Double-tap on the notice screen: set the whole queue aside for this
+   *  launch WITHOUT marking anything seen — it comes back next launch. */
+  private snoozeNotices(): void {
+    this.noticeQueue = []
+    this.go('list')
   }
 
   /** Save: copy the just-saved settings (already in the browser cache, or absent
@@ -985,6 +1035,9 @@ class App {
       case 'question':
         this.pickHighlighted() // tap the highlighted option (or the Dismiss row)
         break
+      case 'notice':
+        this.ackNotice() // got it — never shows again on this device
+        break
       case 'setup':
       case 'error':
         void this.checkAuthAndLoad() // retry the connection
@@ -1017,6 +1070,9 @@ class App {
         break
       case 'question':
         this.snoozePrompt() // dbl-tap sets the question aside to answer later
+        break
+      case 'notice':
+        this.snoozeNotices() // dbl-tap = later — unseen, returns next launch
         break
       case 'setup':
       case 'error':
@@ -1316,6 +1372,8 @@ class App {
         }
       case 'confirm':
         return this.confirmLayout()
+      case 'notice':
+        return this.noticeLayout()
       case 'setup':
         // A pinned header + footer (scroll layout) so the retry hint always shows
         // and the body never overflows into a scrollbar the way a full-screen text
@@ -1412,6 +1470,23 @@ class App {
       header: `${HUD.SEND} Send this message?`,
       body: this.pendingSend?.text || '(empty)',
       footer: `tap = send ${HUD.SEP} dbl = cancel`,
+    }
+  }
+
+  /** The one-time release-notice interstitial: title + body (+ command) on a
+   *  natively-scrolled body. Text is authored for the panel, so `hudSafe` folds
+   *  the typography (em dashes, curly quotes) the HUD font can't draw; the
+   *  command is included verbatim — ugly wrapped, but the screen is then
+   *  self-contained (glasses.ts byte-clamps the body under the firmware cap). */
+  private noticeLayout(): Layout {
+    const n = this.noticeQueue[0]
+    if (!n) return { kind: 'text', content: screen({ header: `${HUD.ATTN} Notice`, body: '(none)', footer: 'tap = back' }) }
+    const body = [n.title, n.body, n.command].filter(Boolean).join('\n\n')
+    return {
+      kind: 'scroll',
+      header: `${HUD.ATTN} Notice ${HUD.SEP} from this update`,
+      body: hudSafe(body),
+      footer: `tap = got it ${HUD.SEP} dbl = later`,
     }
   }
 

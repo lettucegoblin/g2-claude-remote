@@ -108,8 +108,10 @@ still works as a plain-browser web app with no glasses connected.
 
 App updates can also carry a **release notice** — a slim dismissible card above
 the session list for anything important (say, "update your bridge"). Notices are
-baked into the build (nothing is fetched), each one shows until dismissed and
-then never again on that device, and the glasses HUD is never interrupted.
+baked into the build (nothing is fetched), and each one shows until dismissed,
+then never again on that device. On the glasses the same notice appears once as
+a scrollable screen right after connect — tap acknowledges it, double-tap defers
+it to the next launch — and acknowledging on either surface retires it on both.
 
 <p align="center">
   <img src="assets/store/08-panel.png" width="45%" alt="Companion phone panel">
