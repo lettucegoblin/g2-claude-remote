@@ -23,6 +23,20 @@ No config files required.
 If the phone can't connect, open the bridge's port (default `8790`) in the
 host's firewall.
 
+**Updating:** `uvx` caches the built environment, so a plain re-run keeps
+whatever versions it first resolved — including the `claude-rc-api` git
+dependency. To pick up fixes, run once with `--refresh`:
+
+```bash
+uvx --refresh --from "git+https://github.com/ThatCrispyToast/g2-claude-remote#subdirectory=server" claude-remote-bridge
+```
+
+In particular, **"messages send (HTTP 200, they appear in the session) but
+Claude never responds"** on Claude Code ≥ 2.1.220 is fixed in `claude-rc-api`
+0.2.1 — newer workers only start a turn for messages whose ingest identifies as
+a human client, and older library versions identified as something the worker
+demotes to a peer-agent message. Refresh as above to get it.
+
 Also works with `pip install "git+https://github.com/ThatCrispyToast/g2-claude-remote#subdirectory=server"`
 then `claude-remote-bridge`, or from a repo checkout via `python3 server/rc_bridge.py`.
 

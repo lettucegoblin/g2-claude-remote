@@ -29,7 +29,21 @@ at build time.
    the native scroll position. Steady-state changes are per-container
    `textContainerUpgrade`s (header / body / footer diffed independently); a full
    rebuild only when the layout kind or a native list's items change.
-4. **Effort is a fallback control.** Remote-control workers (through at least
+4. **Sends live or die by `anthropic-client-platform`.** Since Claude Code
+   ~2.1.220 the RC backend stamps that request header into every ingested
+   event's `client_platform`, and the worker starts a turn for an inbound user
+   message only when the stamp is a *human* platform (`ios` / `android` /
+   `web_claude_ai` / `desktop_app` — set read out of the 2.1.234 binary).
+   Anything else is demoted to **peer origin** ("Another Claude session sent a
+   message" framing, `isMeta`), and the worker's peer gate may park it forever —
+   the observed failure is exactly "POST /send returns 200, the message shows
+   in the session, Claude never responds" (2.1.219 predates the gate, which is
+   why downgrading "fixed" it). claude-rc-api ≥ 0.2.1 identifies as
+   `web_claude_ai`; the fix lives THERE (rule 1) — and `uvx` deployments cache
+   the resolved git dep, so they need one `--refresh` run to pick it up. The
+   permission / question / interrupt control paths were never gated; only
+   message injection was.
+5. **Effort is a fallback control.** Remote-control workers (through at least
    2.1.212) REFUSE the `apply_flag_settings` control that carries `effortLevel`
    ("REPL bridge does not handle…" — confirmed live), so claude-rc-api's
    `set_effort(wait=…, command_fallback=True)` waits for the worker's verdict
@@ -211,7 +225,7 @@ npx @evenrealities/evenhub-cli qr --url http://<host>:5175   # sideload QR
 
 - **They ride `/send` — no bridge route.** A slash command is just a `/name`
   message; RC workers execute it locally at zero cost (the same mechanism the
-  effort control's fallback uses — see rule 4). The Compose → Commands submenu
+  effort control's fallback uses — see rule 5). The Compose → Commands submenu
   (`commandItems`, `fireSlashCommand`) and the panel's `/` autocomplete both go
   through the existing `send`/`onSend` path. Adding a command is a `SLASH_COMMANDS`
   config entry (`VITE_SLASH_COMMANDS` overrides it in dev), never new bridge code.
