@@ -62,6 +62,8 @@ as the token) → the persisted token file → generate-and-persist.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import hmac
 import ipaddress
 import json
 import math
@@ -482,6 +484,27 @@ class _Bridge(ThreadingHTTPServer):
         self.rc = client
 
 
+def _token_eq(supplied: str) -> bool:
+    """Constant-time comparison of a presented token against ``TOKEN``.
+
+    ``==`` on str short-circuits at the first differing byte, so how long the
+    check runs leaks how much of the prefix a guess got right -- which turns
+    recovering the token from an exponential search into a linear, byte-by-byte
+    one. Nothing here rate-limits guesses, so that signal is worth denying.
+
+    Both sides are hashed first rather than passed to ``compare_digest``
+    directly: it keeps the compared lengths equal (so the token's own length
+    does not leak), and it sidesteps ``compare_digest``'s ASCII-only
+    restriction on str -- ``--token`` / ``$RC_BRIDGE_TOKEN`` accept any format.
+    """
+    if not supplied:
+        return False
+    return hmac.compare_digest(
+        hashlib.sha256(supplied.encode("utf-8")).digest(),
+        hashlib.sha256(TOKEN.encode("utf-8")).digest(),
+    )
+
+
 class _Handler(BaseHTTPRequestHandler):
     server_version = "claude-remote-bridge"
     protocol_version = "HTTP/1.1"
@@ -519,9 +542,9 @@ class _Handler(BaseHTTPRequestHandler):
         if not TOKEN:
             return True  # dev mode: no token configured
         auth = self.headers.get("Authorization", "")
-        if auth.startswith("Bearer ") and auth[7:] == TOKEN:
+        if auth.startswith("Bearer ") and _token_eq(auth[7:]):
             return True
-        if self._query().get("token", [None])[0] == TOKEN:
+        if _token_eq(self._query().get("token", [None])[0] or ""):
             return True
         return False
 
