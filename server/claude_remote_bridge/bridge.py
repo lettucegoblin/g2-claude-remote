@@ -161,6 +161,51 @@ _auth_fails: dict[str, list[float]] = {}
 _auth_blocked: dict[str, float] = {}
 
 
+_SECRET_QS = re.compile(r"((?:token|ticket)=)[^&\s\"']+")
+
+
+def _redact(value: Any) -> Any:
+    """Strip credentials from anything on its way to a log.
+
+    EventSource cannot set an Authorization header, so the SSE stream has to
+    carry its credential in the URL -- which BaseHTTPRequestHandler would
+    otherwise write to the access log verbatim.
+    """
+    return _SECRET_QS.sub(r"\1REDACTED", value) if isinstance(value, str) else value
+
+
+# Short-lived, single-use tickets for the SSE stream. A URL credential leaks by
+# design: into this server's log, into any reverse proxy's log, into anything
+# that samples URLs. The bearer token is long-lived, so a single captured line
+# hands over the account. A ticket is minted by an authenticated POST, spent on
+# first use, and dead within seconds -- so the same captured line is worthless.
+TICKET_TTL_S = 30
+_ticket_lock = threading.Lock()
+_tickets: dict[str, float] = {}
+
+
+def mint_ticket() -> tuple[str, int]:
+    """A fresh single-use stream credential and its lifetime in seconds."""
+    now = time.monotonic()
+    ticket = secrets.token_urlsafe(32)
+    with _ticket_lock:
+        for k, exp in list(_tickets.items()):
+            if exp <= now:
+                del _tickets[k]
+        _tickets[ticket] = now + TICKET_TTL_S
+    return ticket, TICKET_TTL_S
+
+
+def redeem_ticket(ticket: str) -> bool:
+    """Spend a ticket. Always consumes it, so a replay cannot succeed."""
+    if not ticket:
+        return False
+    now = time.monotonic()
+    with _ticket_lock:
+        exp = _tickets.pop(ticket, None)
+    return exp is not None and exp > now
+
+
 def auth_retry_after(ip: str) -> int:
     """Seconds this source must wait before trying again; 0 if it may proceed."""
     if MAX_AUTH_FAILURES <= 0:
@@ -569,7 +614,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt: str, *args: Any) -> None:  # noqa: A003
         if VERBOSE:
-            super().log_message(fmt, *args)
+            super().log_message(fmt, *(_redact(a) for a in args))
 
     # -- request helpers ---------------------------------------------------
     def _query(self) -> dict[str, list[str]]:
@@ -600,6 +645,11 @@ class _Handler(BaseHTTPRequestHandler):
             return True
         if _token_eq(self._query().get("token", [None])[0] or ""):
             return True
+        # Scoped to the stream path on purpose: a ticket is spent on redemption,
+        # so honouring it anywhere would let one request burn the credential the
+        # stream is about to present.
+        if _R_STREAM.match(urlparse(self.path).path):
+            return redeem_ticket(self._query().get("ticket", [""])[0])
         return False
 
     def _client_ip(self) -> str:
@@ -741,6 +791,9 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._gate():
             return
         try:
+            if path == "/api/tickets":
+                ticket, ttl = mint_ticket()
+                return self._json({"ticket": ticket, "expires_in": ttl})
             m = _R_SEND.match(path)
             if m:
                 self._require_active(m["sid"])

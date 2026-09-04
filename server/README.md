@@ -80,6 +80,23 @@ or repo checkout (`VITE_BRIDGE_TOKEN` doubles as the token, so the app repo's
 config file configures both sides). `RC_BRIDGE_TOKEN_WORDS` sets how many words
 a *generated* passphrase has (default 5 ≈ 52 bits; floored at 3).
 
+## Stream credentials
+
+`EventSource` cannot set an `Authorization` header, so the SSE stream has to
+carry its credential in the URL — where it lands in this server's access log, in
+any reverse proxy's log, and in anything that samples URLs. The bearer token is
+long-lived, so one captured line hands over the account.
+
+Preferred flow: `POST /api/tickets` with the bearer header returns
+`{"ticket": "...", "expires_in": 30}`. Pass it as `?ticket=` on
+`/api/sessions/<id>/stream`. A ticket is **single-use** (spent on redemption, so
+replays fail) and valid only on the stream path, so a copy recovered from a log
+is worthless. `?token=` still works for older clients.
+
+Request lines are redacted before logging — both `token=` and `ticket=` are
+written as `REDACTED` — but redaction only covers *this* server's log. A reverse
+proxy in front keeps its own; configure it not to log query strings.
+
 ## What it does
 
 Wraps [`claude-rc-api`](https://github.com/ThatCrispyToast/claude-rc-api)'s
