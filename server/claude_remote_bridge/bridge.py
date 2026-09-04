@@ -72,6 +72,8 @@ import re
 import secrets
 import socket
 import sys
+import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Optional
@@ -141,6 +143,58 @@ HOST = "0.0.0.0"
 PORT = 8790
 TOKEN = ""
 VERBOSE = False
+# Failed-auth throttling. The bearer token is the only thing standing in front
+# of an endpoint that steers every session of the logged-in account, and the
+# timing-safe comparison only removes the shortcut -- nothing else slows a
+# guesser down. 0 failures disables the limiter.
+MAX_AUTH_FAILURES = 10
+AUTH_BLOCK_S = 300
+TRUST_PROXY = False
+# Sliding window over which failures accumulate toward MAX_AUTH_FAILURES.
+_AUTH_WINDOW_S = 60.0
+# Cap on tracked sources, so a public endpoint being sprayed from many
+# addresses cannot grow these tables without bound.
+_AUTH_TABLE_CAP = 4096
+
+_auth_lock = threading.Lock()
+_auth_fails: dict[str, list[float]] = {}
+_auth_blocked: dict[str, float] = {}
+
+
+def auth_retry_after(ip: str) -> int:
+    """Seconds this source must wait before trying again; 0 if it may proceed."""
+    if MAX_AUTH_FAILURES <= 0:
+        return 0
+    now = time.monotonic()
+    with _auth_lock:
+        until = _auth_blocked.get(ip)
+        if until is None:
+            return 0
+        if until > now:
+            return max(1, int(until - now))
+        del _auth_blocked[ip]  # served its time
+        _auth_fails.pop(ip, None)
+    return 0
+
+
+def note_auth_failure(ip: str) -> int:
+    """Record a rejected attempt. Returns the block length if this tripped it."""
+    if MAX_AUTH_FAILURES <= 0:
+        return 0
+    now = time.monotonic()
+    with _auth_lock:
+        hits = [t for t in _auth_fails.get(ip, ()) if now - t < _AUTH_WINDOW_S]
+        hits.append(now)
+        if len(hits) >= MAX_AUTH_FAILURES:
+            _auth_fails.pop(ip, None)
+            _auth_blocked[ip] = now + AUTH_BLOCK_S
+            return AUTH_BLOCK_S
+        _auth_fails[ip] = hits
+        if len(_auth_fails) > _AUTH_TABLE_CAP:
+            for k, v in list(_auth_fails.items()):
+                if not v or now - v[-1] >= _AUTH_WINDOW_S:
+                    _auth_fails.pop(k, None)
+    return 0
 
 VALID_MODES = {"default", "plan", "acceptEdits", "bypassPermissions"}
 # Effort levels the worker's flag-settings schema accepts remotely. "max" is
@@ -548,6 +602,45 @@ class _Handler(BaseHTTPRequestHandler):
             return True
         return False
 
+    def _client_ip(self) -> str:
+        """The source a failed attempt is charged to.
+
+        The peer address by default. X-Forwarded-For is honoured only under
+        --trust-proxy: reading it unconditionally would let any caller set the
+        header and draw a fresh allowance per request, which is worse than no
+        limiter at all. Behind one trusted proxy the RIGHTMOST entry is the one
+        that proxy appended, and the only element a client cannot forge.
+        """
+        if TRUST_PROXY:
+            xff = self.headers.get("X-Forwarded-For", "")
+            if xff:
+                return xff.rsplit(",", 1)[-1].strip()
+        return self.client_address[0]
+
+    def _gate(self) -> bool:
+        """Authenticate, throttling repeat failures. Answers on refusal.
+
+        A valid token is honoured even while its source is blocked. Checking
+        the block first would let an attacker lock the owner OUT: sources are
+        keyed by IP, and behind a reverse proxy without --trust-proxy every
+        caller shares the proxy's address. Since an attacker never holds a
+        valid token, they still fall through to the block on every attempt --
+        the limiter loses nothing, and stops being a denial-of-service lever.
+        """
+        if self._authed():
+            return True
+        ip = self._client_ip()
+        retry = auth_retry_after(ip)
+        if retry:
+            self._too_many(retry)
+            return False
+        blocked = note_auth_failure(ip)
+        if VERBOSE:
+            note = f" - blocked {blocked}s" if blocked else ""
+            print(f"[auth] rejected {ip}{note}", flush=True)
+        self._unauth()
+        return False
+
     # -- response helpers --------------------------------------------------
     def _cors(self) -> None:
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -566,6 +659,17 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _unauth(self) -> None:
         self._json({"error": "unauthorized", "status": 401}, status=401)
+
+    def _too_many(self, retry_after: int) -> None:
+        body = json.dumps({"error": "too many failed attempts", "status": 429}).encode()
+        self.send_response(429)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Retry-After", str(retry_after))
+        self.send_header("Cache-Control", "no-store")
+        self._cors()
+        self.end_headers()
+        self.wfile.write(body)
 
     def _error(self, exc: Exception) -> None:
         if isinstance(exc, SessionInactive):
@@ -596,8 +700,8 @@ class _Handler(BaseHTTPRequestHandler):
     # -- GET ---------------------------------------------------------------
     def do_GET(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
-        if not self._authed():
-            return self._unauth()
+        if not self._gate():
+            return
         try:
             if path == "/api/whoami":
                 return self._json(self._whoami())
@@ -634,8 +738,8 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
         body = self._body()  # always drain the body (keep-alive correctness)
-        if not self._authed():
-            return self._unauth()
+        if not self._gate():
+            return
         try:
             m = _R_SEND.match(path)
             if m:
@@ -981,7 +1085,7 @@ def serve(token_note: str) -> None:
 
 
 def main(argv: Optional[list[str]] = None) -> None:
-    global HOST, PORT, TOKEN, VERBOSE
+    global HOST, PORT, TOKEN, VERBOSE, MAX_AUTH_FAILURES, AUTH_BLOCK_S, TRUST_PROXY
     ap = argparse.ArgumentParser(
         prog="claude-remote-bridge",
         description=(
@@ -994,6 +1098,9 @@ def main(argv: Optional[list[str]] = None) -> None:
     ap.add_argument("--port", type=int, default=None, help="port (default 8790)")
     ap.add_argument("--token", default=None, help="bearer token the app must present (default: env / .env.local / persisted / a generated word passphrase)")
     ap.add_argument("--open", action="store_true", help="run WITHOUT authentication (dev only)")
+    ap.add_argument("--max-auth-failures", type=int, default=None, help="rejected attempts from one source before it is temporarily blocked (default 10; 0 disables)")
+    ap.add_argument("--auth-block-seconds", type=int, default=None, help="how long a blocked source stays blocked (default 300)")
+    ap.add_argument("--trust-proxy", action="store_true", help="take the client IP from X-Forwarded-For; ONLY behind a trusted reverse proxy")
     ap.add_argument("--verbose", action="store_true", help="log every request")
     ap.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     args = ap.parse_args(argv)
@@ -1017,6 +1124,21 @@ def main(argv: Optional[list[str]] = None) -> None:
             f"use the generated token."
         )
     VERBOSE = args.verbose or _cfg("RC_BRIDGE_VERBOSE") not in ("", "0", "false", "no")
+    try:
+        MAX_AUTH_FAILURES = (
+            args.max_auth_failures if args.max_auth_failures is not None
+            else int(_cfg("RC_BRIDGE_MAX_AUTH_FAILURES", "10"))
+        )
+    except ValueError:
+        MAX_AUTH_FAILURES = 10
+    try:
+        AUTH_BLOCK_S = (
+            args.auth_block_seconds if args.auth_block_seconds is not None
+            else int(_cfg("RC_BRIDGE_AUTH_BLOCK_SECONDS", "300"))
+        )
+    except ValueError:
+        AUTH_BLOCK_S = 300
+    TRUST_PROXY = args.trust_proxy or _cfg("RC_BRIDGE_TRUST_PROXY") not in ("", "0", "false", "no")
     serve(token_note)
 
 

@@ -46,12 +46,36 @@ then `claude-remote-bridge`, or from a repo checkout via `python3 server/rc_brid
 --host HOST     bind address (default 0.0.0.0)
 --port PORT     port (default 8790)
 --token TOKEN   bearer token the app must present
---open          run WITHOUT authentication (dev only)
+--open          run WITHOUT authentication (dev only; loopback binds only)
 --verbose       log every request
+
+--max-auth-failures N    rejected attempts from one source before it is
+                         temporarily blocked (default 10; 0 disables)
+--auth-block-seconds N   how long a blocked source stays blocked (default 300)
+--trust-proxy            take the client IP from X-Forwarded-For; ONLY behind a
+                         trusted reverse proxy
 ```
 
+`--open` is refused on a non-loopback bind: unauthenticated plus the default
+`0.0.0.0` would publish an endpoint that steers every session of the logged-in
+account to anyone who can reach the port.
+
+Repeated failed authentications from one source are throttled: 10 within 60s
+blocks that source for 5 minutes, answered `429` with `Retry-After`. A **valid**
+token is always honoured, even from a blocked source — otherwise anyone could
+lock the owner out, since sources are keyed by IP and behind a reverse proxy
+without `--trust-proxy` every caller shares the proxy's address. Successful
+requests are never counted, so the app's polling and long-lived SSE streams
+cannot trip it.
+
+`--trust-proxy` is opt-in for a reason: reading `X-Forwarded-For`
+unconditionally would let any caller set the header and draw a fresh allowance
+per request. With one trusted proxy in front, the rightmost entry is the one it
+appended and the only element a client cannot forge.
+
 Environment variables `RC_BRIDGE_HOST` / `RC_BRIDGE_PORT` / `RC_BRIDGE_TOKEN` /
-`RC_BRIDGE_VERBOSE` are honored, as is a `.env.local` in the working directory
+`RC_BRIDGE_VERBOSE` / `RC_BRIDGE_MAX_AUTH_FAILURES` /
+`RC_BRIDGE_AUTH_BLOCK_SECONDS` / `RC_BRIDGE_TRUST_PROXY` are honored, as is a `.env.local` in the working directory
 or repo checkout (`VITE_BRIDGE_TOKEN` doubles as the token, so the app repo's
 config file configures both sides). `RC_BRIDGE_TOKEN_WORDS` sets how many words
 a *generated* passphrase has (default 5 ≈ 52 bits; floored at 3).
