@@ -94,8 +94,32 @@ export class HttpBridgeClient implements BridgeClient {
     return events ?? []
   }
 
+  /** Mint a single-use, seconds-long ticket for the SSE stream, so the
+   *  long-lived bearer never has to ride in a URL. Resolves to `null` on a
+   *  bridge that predates the endpoint (404), which sends the stream down the
+   *  `?token=` fallback — an un-upgraded bridge keeps working. */
+  private async mintTicket(): Promise<string | null> {
+    if (!this.token) return null // bridge running without auth: nothing to mint
+    try {
+      const { ticket } = await this.req<{ ticket: string }>('/api/tickets', {
+        method: 'POST',
+        headers: this.headers(true),
+        body: '{}',
+      })
+      return ticket || null
+    } catch (e) {
+      if (e instanceof BridgeError && e.status === 404) return null
+      throw e // 401/unreachable is the stream's to interpret, not ours to bury
+    }
+  }
+
   streamEvents(sid: string, fromSeq: number, handlers: StreamHandlers): () => void {
-    return openEventStream(`${this.base}/api/sessions/${this.sid(sid)}/stream`, this.token, fromSeq, handlers)
+    return openEventStream(
+      `${this.base}/api/sessions/${this.sid(sid)}/stream`,
+      { token: this.token, mintTicket: () => this.mintTicket() },
+      fromSeq,
+      handlers,
+    )
   }
 
   // -- writes (all 409 if the session went inactive) ---------------------

@@ -101,7 +101,8 @@ function resolveBridgeToken(s: RuntimeSettings): string {
  */
 export const BRIDGE_URL = resolveBridgeUrl(runtime)
 /** Shared secret matching the bridge's RC_BRIDGE_TOKEN. Sent as a Bearer header
- *  (and as `?token=` on the SSE stream, which can't set headers). */
+ *  on every request — including the one that mints the SSE stream's single-use
+ *  ticket, so this long-lived value never rides in a URL (see rc/stream.ts). */
 export const BRIDGE_TOKEN = resolveBridgeToken(runtime)
 
 /** The bridge URL + token RIGHT NOW, re-reading saved settings so a Settings-card
