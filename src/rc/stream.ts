@@ -1,20 +1,16 @@
 // SSE stream wrapper around the bridge's GET …/stream endpoint.
 //
 // `EventSource` can't set an Authorization header, so the stream's credential
-// has to ride in the query string. It used to be the long-lived bearer token
-// (`?token=`) — the key to every session on the account, deposited into the
-// bridge's log, any reverse-proxy access log, and anything else that samples
-// URLs. Instead we mint a single-use, seconds-long TICKET per connect
-// (`POST /api/tickets` → `?ticket=`), so by the time a URL reaches a log the
-// credential in it is already spent. `?token=` stays as the fallback for a
-// bridge that predates the endpoint.
+// rides in the query string, where it lands in logs. It is therefore a
+// single-use ticket (`POST /api/tickets` → `?ticket=`) rather than the
+// long-lived bearer — see server/README.md, "Stream credentials". `?token=`
+// remains the fallback for a bridge that predates the endpoint.
 //
-// That single-use property is also why reconnection is OURS rather than the
-// browser's: EventSource's built-in retry replays the exact URL it first
-// opened, and a spent ticket answers 401 — a stream that works once and then
-// never again. So every transport blip closes the EventSource (which cancels
-// that built-in retry) and reopens with a freshly minted ticket, resuming from
-// the newest `id:` seen exactly as the browser's own `Last-Event-ID` would.
+// Single-use is why reconnection is OURS rather than the browser's:
+// EventSource's built-in retry replays the exact URL it first opened, and a
+// spent ticket answers 401 — a stream that works once and then never again. So
+// every reconnect mints a fresh ticket, resuming from the newest `id:` seen
+// exactly as the browser's own `Last-Event-ID` would.
 //
 // The bridge frames each event as `id: <seq>\ndata: <RcEvent JSON>` and signals
 // mid-stream failure with a named `event: error` frame (which carries `.data`)
@@ -116,8 +112,8 @@ export function openEventStream(
     }
 
     src.onmessage = (ev: MessageEvent) => {
-      // Track the resume point even for a frame we can't parse: the bridge has
-      // still delivered it, and replaying it on reconnect would only duplicate.
+      // Tracked above the parse guard: an unparseable frame was still
+      // delivered, and replaying it on reconnect would only duplicate it.
       if (/^\d+$/.test(ev.lastEventId)) resumeSeq = Math.max(resumeSeq, Number(ev.lastEventId))
       if (!ev.data) return
       try {
@@ -135,8 +131,7 @@ export function openEventStream(
       const data = (ev as MessageEvent).data
       if (!data) {
         // Transport-level: the socket dropped, or the bridge refused the
-        // connect outright. Either way this URL's ticket is gone, so reopen
-        // with a fresh one rather than let EventSource replay the spent one.
+        // connect. Either way this URL's ticket is spent — retry() reopens.
         retry()
         return
       }

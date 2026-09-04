@@ -93,6 +93,11 @@ Preferred flow: `POST /api/tickets` with the bearer header returns
 replays fail) and valid only on the stream path, so a copy recovered from a log
 is worthless. `?token=` still works for older clients.
 
+Mint **inside the connect path, not once at startup**. `EventSource` reconnects
+on its own, and redemption consumes a ticket unconditionally, so every reconnect
+needs a freshly minted one — replays fail even inside the 30s window. A client
+that mints once opens a stream that works exactly once and then 401s forever.
+
 Request lines are redacted before logging — both `token=` and `ticket=` are
 written as `REDACTED` — but redaction only covers *this* server's log. A reverse
 proxy in front keeps its own; configure it not to log query strings.
