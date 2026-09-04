@@ -856,6 +856,10 @@ def _generate_passphrase(words: int) -> str:
     return "-".join(secrets.choice(WORDS) for _ in range(words))
 
 
+# Bind addresses on which running with auth disabled is survivable.
+_LOOPBACK = ("127.0.0.1", "::1", "localhost")
+
+
 def _resolve_token(cli_token: Optional[str], open_mode: bool) -> tuple[str, str]:
     """The bearer token plus a human note about where it came from.
 
@@ -1000,6 +1004,18 @@ def main(argv: Optional[list[str]] = None) -> None:
     except ValueError:
         PORT = 8790
     TOKEN, token_note = _resolve_token(args.token, args.open)
+    # Running unauthenticated is a dev convenience; binding beyond loopback is
+    # the default. Together they publish an endpoint that steers every session
+    # of the logged-in account and runs tool calls on this machine, to anyone
+    # who can reach the port. Refuse the combination outright rather than
+    # trusting the operator to never pair them by accident. Keyed on an empty
+    # TOKEN, not on --open, so any other route to a blank token is caught too.
+    if not TOKEN and HOST not in _LOOPBACK:
+        sys.exit(
+            f"refusing to run without authentication on a non-loopback bind ({HOST}).\n"
+            f"  --open is dev-only: pair it with --host 127.0.0.1, or drop it and "
+            f"use the generated token."
+        )
     VERBOSE = args.verbose or _cfg("RC_BRIDGE_VERBOSE") not in ("", "0", "false", "no")
     serve(token_note)
 
