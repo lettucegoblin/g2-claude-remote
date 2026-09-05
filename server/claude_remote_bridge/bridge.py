@@ -12,8 +12,10 @@ five deliberate ways, each required by this app:
    Every mutating / streaming route re-checks this and refuses with **409** if
    the session is no longer active. This is the app's non-negotiable rule and it
    is enforced here, server-side, as the single source of truth.
-2. **Auth.** Every request must carry ``Authorization: Bearer $RC_BRIDGE_TOKEN``
-   (or ``?token=`` for ``EventSource``, which cannot set headers). The bridge
+2. **Auth.** Every request must carry ``Authorization: Bearer $RC_BRIDGE_TOKEN``.
+   The SSE stream is the sole exception -- ``EventSource`` cannot set headers --
+   and takes a single-use ``?ticket=`` from ``POST /api/tickets``, or a legacy
+   ``?token=``. Neither query credential is honoured on any other route. The bridge
    binds to ``0.0.0.0`` so the phone can reach it over Tailscale/LAN, so unlike
    the loopback-only webui it needs its own shared-secret guard.
 3. **CORS.** The WebView bundle is a different origin, so responses carry
@@ -643,13 +645,20 @@ class _Handler(BaseHTTPRequestHandler):
         auth = self.headers.get("Authorization", "")
         if auth.startswith("Bearer ") and _token_eq(auth[7:]):
             return True
-        if _token_eq(self._query().get("token", [None])[0] or ""):
-            return True
-        # Scoped to the stream path on purpose: a ticket is spent on redemption,
-        # so honouring it anywhere would let one request burn the credential the
-        # stream is about to present.
+        # BOTH query credentials are confined to the stream -- the one request a
+        # browser cannot put a header on. Accepting the bearer in a URL anywhere
+        # else re-opens exactly what the ticket exists to close: any client,
+        # script or pasted link spilling the key to every session into a log this
+        # server does not control, and redaction only covers our own. Elsewhere
+        # the header is the only way in.
         if _R_STREAM.match(urlparse(self.path).path):
-            return redeem_ticket(self._query().get("ticket", [""])[0])
+            q = self._query()
+            if _token_eq(q.get("token", [None])[0] or ""):
+                return True
+            # Tried last, and only here, because redemption SPENDS the ticket:
+            # honouring it on any other route would let one request burn the
+            # credential the stream is about to present.
+            return redeem_ticket(q.get("ticket", [""])[0])
         return False
 
     def _client_ip(self) -> str:

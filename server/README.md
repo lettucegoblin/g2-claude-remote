@@ -91,7 +91,10 @@ Preferred flow: `POST /api/tickets` with the bearer header returns
 `{"ticket": "...", "expires_in": 30}`. Pass it as `?ticket=` on
 `/api/sessions/<id>/stream`. A ticket is **single-use** (spent on redemption, so
 replays fail) and valid only on the stream path, so a copy recovered from a log
-is worthless. `?token=` still works for older clients.
+is worthless. `?token=` still authenticates the stream, so an older client keeps
+working — but **only** the stream. Neither query credential is honoured on any
+other route, so the bearer cannot be put in a URL that had no reason to carry
+it. The header is the only way in everywhere else.
 
 Mint **inside the connect path, not once at startup**. `EventSource` reconnects
 on its own, and redemption consumes a ticket unconditionally, so every reconnect
