@@ -18,7 +18,9 @@ Tailscale IP) and a bearer token — a short word passphrase like
 app panel's **Settings** card once. The passphrase form is deliberate: it's made
 to be *read off the banner and typed by hand* without error, unlike a random
 blob. (Setting your own `--token` / `RC_BRIDGE_TOKEN` overrides it, any format.)
-No config files required.
+No config files required. The token itself is printed only when the banner goes
+to a **terminal** — under a service manager it names the file instead, so a
+pairing secret never lands in a log that outlives it.
 
 If the phone can't connect, open the bridge's port (default `8790`) in the
 host's firewall.
