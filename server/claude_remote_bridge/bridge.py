@@ -152,6 +152,18 @@ VERBOSE = False
 MAX_AUTH_FAILURES = 10
 AUTH_BLOCK_S = 300
 TRUST_PROXY = False
+# Optional hardening for --trust-proxy. Without it, "only my proxy can reach this
+# port" rests entirely on network position -- typically a firewall rule pinned to
+# the proxy's address. That holds until the address moves: on a docker network
+# with no fixed IPAM, a recreated container can inherit the proxy's IP and with it
+# the right to speak for any client address. A secret the edge injects on every
+# proxied request cannot be inherited that way, so it survives a renumber.
+#
+# This closes the SECURITY half of that exposure and NOT the availability half:
+# if the proxy's address moves, the route still breaks -- it times out while every
+# other route looks healthy. That signature wants a detector, not a header.
+PROXY_SECRET = ""
+PROXY_SECRET_HEADER = "X-Edge-Secret"
 # Sliding window over which failures accumulate toward MAX_AUTH_FAILURES.
 _AUTH_WINDOW_S = 60.0
 # Cap on tracked sources, so a public endpoint being sprayed from many
@@ -585,25 +597,31 @@ class _Bridge(ThreadingHTTPServer):
         self.rc = client
 
 
-def _token_eq(supplied: str) -> bool:
-    """Constant-time comparison of a presented token against ``TOKEN``.
+def _secret_eq(supplied: str, expected: str) -> bool:
+    """Constant-time comparison of two secrets.
 
     ``==`` on str short-circuits at the first differing byte, so how long the
     check runs leaks how much of the prefix a guess got right -- which turns
-    recovering the token from an exponential search into a linear, byte-by-byte
-    one. Nothing here rate-limits guesses, so that signal is worth denying.
+    recovery from an exponential search into a linear, byte-by-byte one. The
+    failed-auth throttle raises the cost of guessing but does not remove that
+    signal, so it is worth denying on its own.
 
     Both sides are hashed first rather than passed to ``compare_digest``
-    directly: it keeps the compared lengths equal (so the token's own length
-    does not leak), and it sidesteps ``compare_digest``'s ASCII-only
-    restriction on str -- ``--token`` / ``$RC_BRIDGE_TOKEN`` accept any format.
+    directly: it keeps the compared lengths equal (so a secret's own length does
+    not leak), and it sidesteps ``compare_digest``'s ASCII-only restriction on
+    str -- these values accept any format.
     """
-    if not supplied:
+    if not supplied or not expected:
         return False
     return hmac.compare_digest(
         hashlib.sha256(supplied.encode("utf-8")).digest(),
-        hashlib.sha256(TOKEN.encode("utf-8")).digest(),
+        hashlib.sha256(expected.encode("utf-8")).digest(),
     )
+
+
+def _token_eq(supplied: str) -> bool:
+    """Constant-time comparison of a presented bearer against ``TOKEN``."""
+    return _secret_eq(supplied, TOKEN)
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -661,6 +679,20 @@ class _Handler(BaseHTTPRequestHandler):
             return redeem_ticket(q.get("ticket", [""])[0])
         return False
 
+    def _from_trusted_edge(self) -> bool:
+        """Whether this request may speak for an address other than its own.
+
+        With no secret configured this is just --trust-proxy, unchanged: the
+        operator has asserted that nothing but their proxy can reach this port,
+        and that assertion rests on network position alone. Set
+        --trust-proxy-secret and the edge must also prove itself on every
+        request, so a caller that merely reaches the port -- by inheriting the
+        proxy's address, say -- still cannot forge a client IP.
+        """
+        if not PROXY_SECRET:
+            return True
+        return _secret_eq(self.headers.get(PROXY_SECRET_HEADER, ""), PROXY_SECRET)
+
     def _client_ip(self) -> str:
         """The source a failed attempt is charged to.
 
@@ -669,8 +701,12 @@ class _Handler(BaseHTTPRequestHandler):
         header and draw a fresh allowance per request, which is worse than no
         limiter at all. Behind one trusted proxy the RIGHTMOST entry is the one
         that proxy appended, and the only element a client cannot forge.
+
+        A request that fails the edge check falls back to its peer address
+        rather than being refused: it is still served, but it answers for itself
+        and cannot charge its failures to somebody else's bucket.
         """
-        if TRUST_PROXY:
+        if TRUST_PROXY and self._from_trusted_edge():
             xff = self.headers.get("X-Forwarded-For", "")
             if xff:
                 return xff.rsplit(",", 1)[-1].strip()
@@ -1157,6 +1193,7 @@ def serve(token_note: str) -> None:
 
 def main(argv: Optional[list[str]] = None) -> None:
     global HOST, PORT, TOKEN, VERBOSE, MAX_AUTH_FAILURES, AUTH_BLOCK_S, TRUST_PROXY
+    global PROXY_SECRET
     ap = argparse.ArgumentParser(
         prog="claude-remote-bridge",
         description=(
@@ -1172,6 +1209,8 @@ def main(argv: Optional[list[str]] = None) -> None:
     ap.add_argument("--max-auth-failures", type=int, default=None, help="rejected attempts from one source before it is temporarily blocked (default 10; 0 disables)")
     ap.add_argument("--auth-block-seconds", type=int, default=None, help="how long a blocked source stays blocked (default 300)")
     ap.add_argument("--trust-proxy", action="store_true", help="take the client IP from X-Forwarded-For; ONLY behind a trusted reverse proxy")
+    ap.add_argument("--trust-proxy-secret", default=None, metavar="VALUE",
+                    help=f"with --trust-proxy, honour X-Forwarded-For only when the proxy also sends {PROXY_SECRET_HEADER}: VALUE")
     ap.add_argument("--verbose", action="store_true", help="log every request")
     ap.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     args = ap.parse_args(argv)
@@ -1210,6 +1249,16 @@ def main(argv: Optional[list[str]] = None) -> None:
     except ValueError:
         AUTH_BLOCK_S = 300
     TRUST_PROXY = args.trust_proxy or _cfg("RC_BRIDGE_TRUST_PROXY") not in ("", "0", "false", "no")
+    PROXY_SECRET = (
+        args.trust_proxy_secret if args.trust_proxy_secret is not None
+        else _cfg("RC_BRIDGE_TRUST_PROXY_SECRET")
+    )
+    if PROXY_SECRET and not TRUST_PROXY:
+        print(
+            "  ! --trust-proxy-secret is set without --trust-proxy: X-Forwarded-For is\n"
+            "    ignored either way, so the secret is doing nothing.",
+            file=sys.stderr, flush=True,
+        )
     serve(token_note)
 
 

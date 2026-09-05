@@ -56,6 +56,8 @@ then `claude-remote-bridge`, or from a repo checkout via `python3 server/rc_brid
 --auth-block-seconds N   how long a blocked source stays blocked (default 300)
 --trust-proxy            take the client IP from X-Forwarded-For; ONLY behind a
                          trusted reverse proxy
+--trust-proxy-secret V   with --trust-proxy, honour X-Forwarded-For only when the
+                         proxy also sends `X-Edge-Secret: V`
 ```
 
 `--open` is refused on a non-loopback bind: unauthenticated plus the default
@@ -75,9 +77,38 @@ unconditionally would let any caller set the header and draw a fresh allowance
 per request. With one trusted proxy in front, the rightmost entry is the one it
 appended and the only element a client cannot forge.
 
+`--trust-proxy` alone trusts **network position** — it assumes nothing but your
+proxy can reach the port, which in practice is a firewall rule pinned to the
+proxy's address. That assumption expires the moment the address moves: on a
+Docker network with no fixed IPAM, a recreated container can inherit the proxy's
+IP and with it the right to speak for any client address.
+
+`--trust-proxy-secret` (or `RC_BRIDGE_TRUST_PROXY_SECRET`) closes that. The edge
+injects a secret header on every proxied request, and a caller that merely
+reaches the port cannot produce it. In Traefik that is a headers middleware on
+the route, which overwrites the header on every request so a client cannot
+supply its own:
+
+```yaml
+ccrc-edge-secret:
+  headers:
+    customRequestHeaders:
+      X-Edge-Secret: "<value>"
+```
+
+A request that fails the check is **not refused** — it simply answers for its own
+peer address, so it cannot charge failures to somebody else's bucket. This is
+opt-in hardening: with no secret set, `--trust-proxy` behaves exactly as before.
+
+Note what it does *not* fix. If the proxy's address moves, the route still breaks
+— it times out while every other route looks healthy. The secret stops the wrong
+container inheriting the proxy's privileges; it does nothing about losing the
+proxy. That half wants a detector, not a header.
+
 Environment variables `RC_BRIDGE_HOST` / `RC_BRIDGE_PORT` / `RC_BRIDGE_TOKEN` /
 `RC_BRIDGE_VERBOSE` / `RC_BRIDGE_MAX_AUTH_FAILURES` /
-`RC_BRIDGE_AUTH_BLOCK_SECONDS` / `RC_BRIDGE_TRUST_PROXY` are honored, as is a `.env.local` in the working directory
+`RC_BRIDGE_AUTH_BLOCK_SECONDS` / `RC_BRIDGE_TRUST_PROXY` /
+`RC_BRIDGE_TRUST_PROXY_SECRET` are honored, as is a `.env.local` in the working directory
 or repo checkout (`VITE_BRIDGE_TOKEN` doubles as the token, so the app repo's
 config file configures both sides). `RC_BRIDGE_TOKEN_WORDS` sets how many words
 a *generated* passphrase has (default 5 ≈ 52 bits; floored at 3).
