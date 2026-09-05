@@ -105,6 +105,20 @@ Note what it does *not* fix. If the proxy's address moves, the route still break
 container inheriting the proxy's privileges; it does nothing about losing the
 proxy. That half wants a detector, not a header.
 
+`contrib/check-edge-pin.sh` is that detector, and it checks the cause rather than
+the symptom:
+
+```bash
+server/contrib/check-edge-pin.sh --network coolify \
+  --container coolify-proxy --addr 10.0.1.13
+```
+
+Exit `0` if the pinned address is still held by the proxy, `1` if nothing holds
+it (the route is broken or about to be), `2` if a **different** container has
+taken it. That last case is the one a health check cannot see — the route keeps
+answering normally right up until the squatter uses what it inherited. Read-only,
+and it needs docker access rather than root.
+
 Environment variables `RC_BRIDGE_HOST` / `RC_BRIDGE_PORT` / `RC_BRIDGE_TOKEN` /
 `RC_BRIDGE_VERBOSE` / `RC_BRIDGE_MAX_AUTH_FAILURES` /
 `RC_BRIDGE_AUTH_BLOCK_SECONDS` / `RC_BRIDGE_TRUST_PROXY` /
