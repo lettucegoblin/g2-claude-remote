@@ -1122,7 +1122,16 @@ def serve(token_note: str) -> None:
     for label, url in rows:
         print(f"    Bridge URL ({label + ')':<11} {url}")
     if TOKEN:
-        print(f"    Bridge token:           {TOKEN}")
+        # Shown ONLY to a terminal. Under systemd or `| tee` this banner IS a log
+        # file, and a pairing secret written there outlives every process that
+        # could have used it -- journald keeps its own copy besides, so one
+        # restart can persist it twice. The note names the source either way, and
+        # for a generated token that is the 0600 file to read, so interactive
+        # pairing is unchanged and a supervised run says where to look instead.
+        if sys.stdout.isatty():
+            print(f"    Bridge token:           {TOKEN}")
+        else:
+            print(f"    Bridge token:           not shown (stdout is not a terminal)")
         print(f"                            ({token_note})")
     else:
         print(
